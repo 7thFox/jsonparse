@@ -10,22 +10,41 @@
 
 using namespace std::string_literals; // enables s-suffix for std::string literals
 
+const bool AllowTrailingCommas = false;
+
 enum TokenKind
 {
-    ObjectBegin,
-    ObjectEnd,
-    PropertyNameQuoted,
-    PropertyColon,
-    Literal,
+    LeftSQBracket,
+    RightSQBracket,
+    LeftCBracket,
+    RightCBracket,
+    Colon,
     Comma,
+
+    DoubleQuote,
+    Plus,
+    Minus,
+    Exp,
+    Period,
+
+    TrueLiteral,
+    FalseLiteral,
+    NullLiteral,
+
+    String,
+    Integer,
 };
 
-enum NodeKind
+enum JTokenKind
 {
-    TokenNode,
-    ArrayNode,
-    ObjectNode,
-    PropertyNode,
+    ObjectToken,
+    ArrayToken,
+    NumberToken,
+    StringToken,
+    LiteralToken,
+
+    PropertyNameToken,// Not a real token, only for state machine reasons
+    PropertyToken,// Technically by the JSON def, this isn't a token
 };
 
 class Token{
@@ -38,42 +57,84 @@ public:
     TokenKind Kind;
 };
 
-class JNode
+class JToken
 {
 public:
     virtual void Print(std::string indent) = 0;
 };
-class JToken : public JNode {
+
+class JNumber : public JToken {
 public:
-    Token* Value;
-    JToken(Token* value){
-        Value = value;
+    Token* LeadingSign;
+    Token* Integer;
+    Token* Period;
+    Token* FractionalInteger;
+    Token* Exponent;
+    Token* ExponentSign;
+    Token* ExponentInteger;
+
+    JNumber(Token* value){
+        // TODO
     }
     void Print(std::string indent)
     {
-        std::cout << indent << "Value: " << Value->StringValue << std::endl;
+        // TODO
     }
 };
-class JProperty : public JNode {
+
+class JString : public JToken {
 public:
-    Token *Name;
+    Token *LeftQuote;
+    Token *Value;
+    Token *RightQuote;
+    JString(Token *start, Token *value, Token *end)
+    {
+        LeftQuote = start;
+        Value = value;
+        RightQuote = end;
+    }
+    void Print(std::string indent) {
+        std::cout
+            << indent
+            << LeftQuote->StringValue
+            << Value->StringValue// TODO JOSH, parse escapes
+            << RightQuote->StringValue
+            << std::endl;
+    }
+};
+
+class JLiteral : public JToken {
+    Token *Value;
+    JLiteral()
+    {
+        // TODO
+    }
+    void Print(std::string indent) {
+        // TODO
+    }
+};
+
+class JProperty : public JToken {
+public:
+    JString *NameString;
     Token* ColonToken;
-    JNode *Value;
+    JToken *Value;
     Token* TrailingComma;
-    JProperty(Token* name, Token* colon, JNode* value, Token* trailingComma){
-        Name = name;
+    JProperty(JString* name, Token* colon, JToken* value, Token* trailingComma){
+        NameString = name;
         ColonToken = colon;
         Value = value;
         TrailingComma = trailingComma;
     }
     void Print(std::string indent) {
-        std::cout << indent << "Property '" << Name->StringValue << "':" << std::endl;
+        std::cout << indent << "Property '" << NameString->Value->StringValue << "':" << std::endl;
         Value->Print(indent + ONE_INDENT);
     }
 };
-class JObject : public JNode {
-public: 
-    Token* BeginToken;
+
+class JObject : public JToken {
+public:
+    Token *BeginToken;
     std::vector<JProperty *> *Properties;
     Token *EndToken;
 
@@ -90,12 +151,22 @@ public:
         }
     }
 };
-class JArray : public JNode {
-public: 
+
+class JArray : public JToken {
+public:
+    Token *StartToken;
+    std::vector<JToken *> *Values;
+    Token *EndToken;
+    JArray()
+    {
+        // TODO
+    }
     void Print(std::string indent) {
         std::cout << indent << "Array:" << std::endl;
+        // TODO
     }
 };
+
 struct ParseState
 {
     ParseState(std::function<ParseState *(char)> nextstate)
@@ -112,8 +183,8 @@ struct ParseState
 
 std::stringstream token;
 std::stack<Token *> tokens;
-std::stack<NodeKind> nodeKinds;
-std::stack<JNode *> nodes;
+std::stack<JTokenKind> nodeKinds;
+std::stack<JToken *> nodes;
 
 void emit(TokenKind kind){
     tokens.push(new Token(kind, token.str()));
@@ -122,18 +193,23 @@ void emit(TokenKind kind){
 }
 
 ParseState *beginToken();
-ParseState *error(std::string);
-ParseState *unexpectedInput(char c);
-ParseState *ignoreInput();
-ParseState *parseObject();
+ParseState *parseObjectPropertyOrEnd();
+ParseState *parseObjectPropertyRequired();
 ParseState *parseObjectEnd();
-ParseState *parsePropertyNameQuoted();
+ParseState *parseString();
 ParseState *parsePropertyValue();
 ParseState *parseOptionalComma();
 ParseState *parseInteger();
-ParseState *pushNode();
-ParseState *eof();
 
+ParseState *pushNode();
+
+// Terminal states
+ParseState *eof();
+ParseState *error(std::string);
+ParseState *unexpectedInput(char c);
+ParseState *ignoreInput();
+
+// Helpers
 ParseState *ignoreWhitespace(ParseState *);
 ParseState *unpeek(ParseState *, char);
 
@@ -141,8 +217,7 @@ int main()
 {
     auto jsonText = R"(
         {
-            "test": 12345,
-            "foobar": 3
+            "test": "12345",
         }   )"s;
 
     auto state = ignoreWhitespace(beginToken());
@@ -172,31 +247,61 @@ int main()
 ParseState *beginToken(){
     return new ParseState([](char c) {
         if (std::isdigit(c)){
-            nodeKinds.push(NodeKind::TokenNode);
+            nodeKinds.push(JTokenKind::NumberToken);
             token << c;
             return parseInteger();
         }
         switch (c) {
             case '{':
-                nodeKinds.push(NodeKind::ObjectNode);
+                nodeKinds.push(JTokenKind::ObjectToken);
                 token << c;
-                emit(TokenKind::ObjectBegin);
-                return ignoreWhitespace(parseObject());
+                emit(TokenKind::LeftCBracket);
+                return ignoreWhitespace(parseObjectPropertyOrEnd());
+            case '[':
+                break;
+            case '"':
+                nodeKinds.push(JTokenKind::StringToken);
+                token << c;
+                emit(TokenKind::DoubleQuote);
+                return parseString();
+            case 't':
+                break;
+            case 'f':
+                break;
+            case 'n':
+                break;
             }
         return error("Expected beginning of token.");
     });
 }
 
-ParseState *parseObject(){
+ParseState *parseObjectPropertyOrEnd(){
     return new ParseState([](char c) { 
         switch (c)
         {
         case '"':
-            nodeKinds.push(NodeKind::PropertyNode);
+            nodeKinds.push(JTokenKind::PropertyToken);
+            nodeKinds.push(JTokenKind::PropertyNameToken);
             token << c;
-            return parsePropertyNameQuoted();
+            emit(TokenKind::DoubleQuote);
+            return parseString();
         }
-        return unpeek(parseObjectEnd(), c);
+        return unpeek(parseObjectEnd(), c);// Or End
+    });
+}
+
+ParseState *parseObjectPropertyRequired(){
+    return new ParseState([](char c) { 
+        switch (c)
+        {
+        case '"':
+            nodeKinds.push(JTokenKind::PropertyToken);
+            nodeKinds.push(JTokenKind::PropertyNameToken);
+            token << c;
+            emit(TokenKind::DoubleQuote);
+            return parseString();
+        }
+        return unexpectedInput(c);
     });
 }
 
@@ -206,65 +311,69 @@ ParseState *parseObjectEnd(){
         {
         case '}':
             token << c;
-            emit(TokenKind::ObjectEnd);
+            emit(TokenKind::LeftCBracket);
             return pushNode();
         }
         return unexpectedInput(c);
     });
 }
 
-ParseState *parsePropertyNameQuoted(){
+ParseState *parseString(){
     return new ParseState([](char c) {
-        token << c;
-        if (c == '"')
+        switch (c)
         {
-            emit(TokenKind::PropertyNameQuoted);
-            return ignoreWhitespace(parsePropertyValue());
+        case '"':
+            emit(TokenKind::String);
+            token << c;
+            emit(TokenKind::DoubleQuote);
+            return pushNode();
         }
-        return parsePropertyNameQuoted();
+        token << c;
+        return parseString();
     });
 }
+
 ParseState *parsePropertyValue() {
     return new ParseState([](char c) {
         if (c == ':')
         {
             token << c;
-            emit(TokenKind::PropertyColon);
+            emit(TokenKind::Colon);
             return ignoreWhitespace(beginToken());
         }
 
         return error("Expected :");
     });
 }
-ParseState *parseInteger(){
+
+ParseState *parseInteger() {// TODO: Parse Number
     return new ParseState([](char c) { 
         if (std::isdigit(c))
         {
             token << c;
             return parseInteger();
         }
-        emit(TokenKind::Literal);
+        emit(TokenKind::Integer);
         return unpeek(pushNode(), c);
     });
 }
+
 ParseState *pushNode(){
     auto kind = nodeKinds.top();
     nodeKinds.pop();
     bool hadTrailingComma = false;
     switch (kind)
     {
-    case NodeKind::TokenNode:
+    // case JTokenKind::NumberToken:
+    // {
+    //     // nodes.push(new JToken(tokens.top()));
+    //     // tokens.pop();
+    //     break;
+    // }
+    case JTokenKind::ObjectToken:
     {
-        nodes.push(new JToken(tokens.top()));
-        tokens.pop();
-        break;
-    }
-    case NodeKind::ObjectNode:
-    {
-        auto end = tokens.top();
-        tokens.pop();
-        auto begin = tokens.top();
-        tokens.pop();
+        auto end = tokens.top(); tokens.pop();
+        auto begin = tokens.top(); tokens.pop();
         auto props = new std::vector<JProperty *>();
         while (!nodes.empty())
         {
@@ -280,7 +389,16 @@ ParseState *pushNode(){
         nodes.push(new JObject(begin, props, end));
         break;
     }
-    case NodeKind::PropertyNode:
+    case JTokenKind::StringToken:
+    case JTokenKind::PropertyNameToken:
+    {
+        auto end = tokens.top(); tokens.pop();
+        auto value = tokens.top(); tokens.pop();
+        auto start = tokens.top(); tokens.pop();
+        nodes.push(new JString(start, value, end));
+        break;
+    }
+    case JTokenKind::PropertyToken:
     {
         Token *trailingComma = nullptr;
         if (tokens.top()->Kind == TokenKind::Comma){
@@ -288,12 +406,10 @@ ParseState *pushNode(){
             trailingComma = tokens.top();
             tokens.pop();
         }
-        auto colon = tokens.top();
-        tokens.pop();
-        auto prop = new JProperty(tokens.top(), colon, nodes.top(), trailingComma);
-        tokens.pop();
-        nodes.pop();
-        nodes.push(prop);
+        auto value = nodes.top(); nodes.pop();
+        auto colon = tokens.top(); tokens.pop();
+        auto name = dynamic_cast<JString*>(nodes.top()); nodes.pop();
+        nodes.push(new JProperty(name, colon, value, trailingComma));
         break;
     }
     default:
@@ -306,18 +422,22 @@ ParseState *pushNode(){
     }
 
     switch (nodeKinds.top()){
-    case NodeKind::ObjectNode:
-        return ignoreWhitespace(hadTrailingComma ? parseObject() : parseObjectEnd());
-    case NodeKind::PropertyNode:
-        return ignoreWhitespace(parseOptionalComma());
-    default:
-        std::cerr << "Could not continue after node " << nodeKinds.top() << std::endl;
-        return ignoreInput();
+    case JTokenKind::ObjectToken:
+        return ignoreWhitespace(hadTrailingComma 
+            ? (AllowTrailingCommas ? parseObjectPropertyOrEnd() : parseObjectPropertyRequired())
+            : parseObjectEnd());
+    case JTokenKind::PropertyToken:
+        return kind == JTokenKind::PropertyNameToken
+            ? ignoreWhitespace(parsePropertyValue()) // Name parsed, needs value
+            : ignoreWhitespace(parseOptionalComma());// Value parsed, but have not created the property
     }
+    std::cerr << "Could not continue after node " << nodeKinds.top() << std::endl;
+    return ignoreInput();
 }
 
 ParseState *parseOptionalComma(){
     return new ParseState([](char c) { 
+        // either way, we're pushing the property, we're just getting the trailing comma first
         if (c == ',')
         {
             token << c;
