@@ -132,13 +132,14 @@ public:
 };
 
 class JLiteral : public JToken {
+public:
     Token *Value;
-    JLiteral()
+    JLiteral(Token *value)
     {
-        // TODO
+        Value = value;
     }
     void Print(std::string indent) {
-        // TODO
+        std::cout << indent << Value->StringValue << std::endl;
     }
 };
 
@@ -249,11 +250,15 @@ ParseState *ignoreInput();
 // Helpers
 ParseState *ignoreWhitespace(ParseState *);
 ParseState *unpeek(ParseState *, char);
+ParseState *readLiteral(std::string sequence, TokenKind literalKind);
 
 int main()
 {
     auto jsonText = R"(
         {
+            "l1": true,
+            "l2": false,
+            "l3": null,
             "    ": 1,
             "S   ": -1,
             " D  ": 1.1,
@@ -328,11 +333,14 @@ ParseState *beginToken(){
                 emit(TokenKind::Sign);
                 return parseIntegerStart();
             case 't':
-                break;
+                nodeKinds.push(JTokenKind::LiteralToken);
+                return unpeek(readLiteral("true", TokenKind::TrueLiteral), c);
             case 'f':
-                break;
+                nodeKinds.push(JTokenKind::LiteralToken);
+                return unpeek(readLiteral("false", TokenKind::FalseLiteral), c);
             case 'n':
-                break;
+                nodeKinds.push(JTokenKind::LiteralToken);
+                return unpeek(readLiteral("null", TokenKind::NullLiteral), c);
             }
         return error("Expected beginning of token.");
     });
@@ -535,6 +543,12 @@ ParseState *pushNode(){
     bool hadTrailingComma = false;
     switch (kind)
     {
+    case JTokenKind::LiteralToken:
+    {
+        auto value = tokens.top(); tokens.pop();
+        nodes.push(new JLiteral(value));
+        break;
+    }
     case JTokenKind::NumberToken:
     {
         auto expPart = tokens.top(); tokens.pop();
@@ -661,4 +675,21 @@ ParseState *unpeek(ParseState * state, char c)
     auto next = (*state)(c);
     delete state;
     return next;
+}
+
+ParseState *readLiteral(std::string sequence, TokenKind literalKind)
+{
+    return new ParseState([=](char c) {
+        if (c == sequence[0])
+        {
+            token << c;
+            if (sequence.length() == 1)
+            {
+                emit(literalKind);
+                return pushNode();
+            }
+            return readLiteral(sequence.substr(1), literalKind);
+        }
+        return unexpectedInput(c);
+    });
 }
