@@ -63,11 +63,14 @@ public:
 class JToken
 {
 public:
+    virtual JTokenKind Kind() = 0;
     virtual void Print(std::string indent) = 0;
 };
 
 class JNumber : public JToken {
 public:
+    JTokenKind Kind() { return JTokenKind::NumberToken; }
+
     Token* LeadingSign;
     Token* Integer;
     Token* Period;
@@ -114,6 +117,8 @@ public:
 
 class JString : public JToken {
 public:
+    JTokenKind Kind() { return JTokenKind::StringToken; }
+
     Token *LeftQuote;
     Token *Value;
     Token *RightQuote;
@@ -127,7 +132,7 @@ public:
         std::cout
             << indent
             << LeftQuote->StringValue
-            << Value->StringValue// TODO JOSH, parse escapes
+            << Value->StringValue
             << RightQuote->StringValue
             << std::endl;
     }
@@ -135,6 +140,8 @@ public:
 
 class JLiteral : public JToken {
 public:
+    JTokenKind Kind() { return JTokenKind::LiteralToken; }
+
     Token *Value;
     JLiteral(Token *value)
     {
@@ -147,6 +154,8 @@ public:
 
 class JProperty : public JToken {
 public:
+    JTokenKind Kind() { return JTokenKind::PropertyToken; }
+
     JString *NameString;
     Token* ColonToken;
     JToken *Value;
@@ -165,6 +174,8 @@ public:
 
 class JObject : public JToken {
 public:
+    JTokenKind Kind() { return JTokenKind::ObjectToken; }
+
     Token *BeginToken;
     std::vector<JProperty *> *Properties;
     Token *EndToken;
@@ -185,6 +196,8 @@ public:
 
 class JArrayElement : public JToken {
 public:
+    JTokenKind Kind() { return JTokenKind::ArrayElementToken; }
+
     JToken *Value;
     Token *TrailingComma;
     JArrayElement(JToken *value, Token *trailingComma){
@@ -200,6 +213,8 @@ public:
 class JArray : public JToken
 {
 public:
+    JTokenKind Kind() { return JTokenKind::ArrayToken; }
+
     Token *StartToken;
     std::vector<JArrayElement *> *Values;
     Token *EndToken;
@@ -315,9 +330,17 @@ int main()
         delete state;
         state = next;
     }
+
+    if (nodes.size() > 1 || tokens.size() > 0) {
+        std::cerr << "Unexpected EOF" << std::endl;
+    }
+    else if (!nodes.empty()) {
+        nodes.top()->Print("");
+    }
+
     while (!nodes.empty()){
         if (nodes.top() != nullptr) {
-            nodes.top()->Print("");
+            // nodes.top()->Print("");
             delete nodes.top();
         }
         nodes.pop();
@@ -325,7 +348,7 @@ int main()
 
     while (!tokens.empty()){
         if (tokens.top() != nullptr) {
-            std::cout << "Token: " << tokens.top()->Kind << " Value: " << tokens.top()->StringValue << std::endl;
+            // std::cout << "Token: " << tokens.top()->Kind << " Value: " << tokens.top()->StringValue << std::endl;
             delete tokens.top();
         }
         tokens.pop();
@@ -424,7 +447,7 @@ ParseState *parseObjectEnd(){
     });
 }
 
-ParseState *parseString(){
+ParseState *parseString(){// TODO JOSH, parse escapes
     return new ParseState([](char c) {
         switch (c)
         {
@@ -603,8 +626,8 @@ ParseState *pushNode(){
         auto props = new std::vector<JProperty *>();
         while (!nodes.empty())
         {
-            if (auto prop = dynamic_cast<JProperty *>(nodes.top())){// TOOD JOSH: Add JTokenType
-                props->push_back(prop);
+            if (nodes.top()->Kind() == JTokenKind::PropertyToken){
+                props->push_back(dynamic_cast<JProperty *>(nodes.top()));
                 nodes.pop();
             }
             else {
@@ -622,8 +645,8 @@ ParseState *pushNode(){
         auto elems = new std::vector<JArrayElement *>();
         while (!nodes.empty())
         {
-            if (auto prop = dynamic_cast<JArrayElement *>(nodes.top())){// TOOD JOSH: Add JTokenType
-                elems->push_back(prop);
+            if (nodes.top()->Kind() == JTokenKind::ArrayElementToken){
+                elems->push_back(dynamic_cast<JArrayElement *>(nodes.top()));
                 nodes.pop();
             }
             else {
