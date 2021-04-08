@@ -4,13 +4,15 @@
 #include <stack>
 #include <sstream>
 #include <vector>
+#include <queue>
 #include <algorithm>
 
 #define ONE_INDENT "  "
 
 using namespace std::string_literals; // enables s-suffix for std::string literals
 
-const bool AllowTrailingCommas = false;
+const bool AllowTrailingCommas = true;
+const bool AllowSuperfluousLeadingZeroes = false;
 
 enum TokenKind
 {
@@ -22,10 +24,9 @@ enum TokenKind
     Comma,
 
     DoubleQuote,
-    Plus,
-    Minus,
+    Sign,
     Exp,
-    Period,
+    DecimalPoint,
 
     TrueLiteral,
     FalseLiteral,
@@ -73,12 +74,39 @@ public:
     Token* ExponentSign;
     Token* ExponentInteger;
 
-    JNumber(Token* value){
-        // TODO
+    JNumber(
+        Token* leadingSign,
+        Token* integer,
+        Token* period,
+        Token* fractionalInteger,
+        Token* exponent,
+        Token* exponentSign,
+        Token* exponentInteger)
+    {
+        LeadingSign = leadingSign;
+        Integer = integer;
+        Period = period;
+        FractionalInteger = fractionalInteger;
+        Exponent = exponent;
+        ExponentSign = exponentSign;
+        ExponentInteger = exponentInteger;
     }
     void Print(std::string indent)
     {
-        // TODO
+        std::cout << indent;
+        if (LeadingSign != nullptr)
+            std::cout << LeadingSign->StringValue;
+        std::cout << Integer->StringValue;
+        if (Period != nullptr)
+            std::cout << Period->StringValue
+                      << FractionalInteger->StringValue;
+        if (Exponent != nullptr) {
+            std::cout << Exponent->StringValue;
+            if (ExponentSign != nullptr)
+                std::cout << ExponentSign->StringValue;
+            std::cout << ExponentInteger->StringValue;
+        }
+        std::cout << std::endl;
     }
 };
 
@@ -199,7 +227,15 @@ ParseState *parseObjectEnd();
 ParseState *parseString();
 ParseState *parsePropertyValue();
 ParseState *parseOptionalComma();
+ParseState *parseIntegerStart();
 ParseState *parseInteger();
+ParseState *parseOptionalDecimal();
+ParseState *parseFractionalIntegerStart();
+ParseState *parseFractionalInteger();
+ParseState *parseOptionalExp();
+ParseState *parseOptionalExpSign();
+ParseState *parseExpIntegerStart();
+ParseState *parseExpInteger();
 
 ParseState *pushNode();
 
@@ -207,6 +243,7 @@ ParseState *pushNode();
 ParseState *eof();
 ParseState *error(std::string);
 ParseState *unexpectedInput(char c);
+ParseState *expectedInput(std::string expectedMessage, char c);
 ParseState *ignoreInput();
 
 // Helpers
@@ -217,7 +254,23 @@ int main()
 {
     auto jsonText = R"(
         {
-            "test": "12345",
+            "    ": 1,
+            "S   ": -1,
+            " D  ": 1.1,
+            "SD  ": -1.1,
+            "  E ": 1e3,
+            "S E ": -1e3,
+            "  ES": 1e-3,
+            "S ES": -1e-3,
+            " DE ": 1.6e3,
+            "SDE ": -1.6e3,
+            " DES": 1.6e-3,
+            "SDES": -1.6e-3,
+            "Z": 0,
+            "NZ": -0,
+            "ZD": 0.31,
+            "NZD": -0.31,
+            "string": "asdf"
         }   )"s;
 
     auto state = ignoreWhitespace(beginToken());
@@ -246,9 +299,14 @@ int main()
 
 ParseState *beginToken(){
     return new ParseState([](char c) {
-        if (std::isdigit(c)){
+        if (std::isdigit(c)) {
             nodeKinds.push(JTokenKind::NumberToken);
+            tokens.push(nullptr);// leading sign
             token << c;
+            if (!AllowSuperfluousLeadingZeroes && c == '0') {
+                emit(TokenKind::Integer);
+                return parseOptionalDecimal();
+            }
             return parseInteger();
         }
         switch (c) {
@@ -264,6 +322,11 @@ ParseState *beginToken(){
                 token << c;
                 emit(TokenKind::DoubleQuote);
                 return parseString();
+            case '-':
+                nodeKinds.push(JTokenKind::NumberToken);
+                token << c;
+                emit(TokenKind::Sign);
+                return parseIntegerStart();
             case 't':
                 break;
             case 'f':
@@ -301,7 +364,7 @@ ParseState *parseObjectPropertyRequired(){
             emit(TokenKind::DoubleQuote);
             return parseString();
         }
-        return unexpectedInput(c);
+        return expectedInput("'\"'", c);
     });
 }
 
@@ -314,7 +377,7 @@ ParseState *parseObjectEnd(){
             emit(TokenKind::LeftCBracket);
             return pushNode();
         }
-        return unexpectedInput(c);
+        return expectedInput("}", c);
     });
 }
 
@@ -346,12 +409,120 @@ ParseState *parsePropertyValue() {
     });
 }
 
-ParseState *parseInteger() {// TODO: Parse Number
+ParseState *parseIntegerStart() {
+    if (AllowSuperfluousLeadingZeroes){
+        return parseInteger();
+    }
+    return new ParseState([](char c) { 
+        if (c == '0')
+        {
+            token << c;
+            emit(TokenKind::Integer);
+            return parseOptionalDecimal();
+        }
+        if (std::isdigit(c))
+        {
+            token << c;
+            return parseInteger();
+        }
+        return expectedInput("digit", c);
+    });
+}
+
+ParseState *parseInteger() {
     return new ParseState([](char c) { 
         if (std::isdigit(c))
         {
             token << c;
             return parseInteger();
+        }
+        emit(TokenKind::Integer);
+        return unpeek(parseOptionalDecimal(), c);
+    });
+}
+
+ParseState *parseOptionalDecimal() {
+    return new ParseState([](char c) { 
+        if (c == '.')
+        {
+            token << c;
+            emit(TokenKind::DecimalPoint);
+            return parseFractionalIntegerStart();
+        }
+        tokens.push(nullptr);// .
+        tokens.push(nullptr);// XXX
+        return unpeek(parseOptionalExp(), c);
+    });
+}
+
+ParseState *parseFractionalIntegerStart() {
+    return new ParseState([](char c) { 
+        if (std::isdigit(c))
+        {
+            token << c;
+            return parseFractionalInteger();
+        }
+        return expectedInput("digit", c);
+    });
+}
+
+ParseState *parseFractionalInteger() {
+    return new ParseState([](char c) { 
+        if (std::isdigit(c))
+        {
+            token << c;
+            return parseFractionalInteger();
+        }
+        emit(TokenKind::Integer);
+        return unpeek(parseOptionalExp(), c);
+    });
+}
+
+ParseState *parseOptionalExp() {
+    return new ParseState([](char c) { 
+        if (c == 'e' || c == 'E')
+        {
+            token << c;
+            emit(TokenKind::Exp);
+            return parseOptionalExpSign();
+        }
+        tokens.push(nullptr);// e
+        tokens.push(nullptr);// +/-
+        tokens.push(nullptr);// XXX
+        return unpeek(pushNode(), c);
+    });
+}
+
+ParseState *parseOptionalExpSign() {
+    return new ParseState([](char c) { 
+        if (c == '-' || c == '+')
+        {
+            token << c;
+            emit(TokenKind::Sign);
+            return parseExpIntegerStart();
+        }
+        tokens.push(nullptr);// +/-
+        return unpeek(parseExpIntegerStart(), c);
+    });
+}
+
+ParseState *parseExpIntegerStart() {
+    return new ParseState([](char c) { 
+        if (std::isdigit(c))
+        {
+            token << c;
+            return parseExpInteger();
+        }
+        return expectedInput("digit", c);
+    });
+}
+
+ParseState *parseExpInteger() {
+    return new ParseState([](char c) { 
+        if (std::isdigit(c))
+        {
+            token << c;
+            return parseExpInteger();
         }
         emit(TokenKind::Integer);
         return unpeek(pushNode(), c);
@@ -364,12 +535,19 @@ ParseState *pushNode(){
     bool hadTrailingComma = false;
     switch (kind)
     {
-    // case JTokenKind::NumberToken:
-    // {
-    //     // nodes.push(new JToken(tokens.top()));
-    //     // tokens.pop();
-    //     break;
-    // }
+    case JTokenKind::NumberToken:
+    {
+        auto expPart = tokens.top(); tokens.pop();
+        auto expSign = tokens.top(); tokens.pop();
+        auto exp = tokens.top(); tokens.pop();
+        auto fractionalPart = tokens.top(); tokens.pop();
+        auto decimal = tokens.top(); tokens.pop();
+        auto wholePart = tokens.top(); tokens.pop();
+        auto leadingMinus =   tokens.top(); tokens.pop();
+
+        nodes.push(new JNumber(leadingMinus, wholePart, decimal, fractionalPart, exp, expSign, expPart));
+        break;
+    }
     case JTokenKind::ObjectToken:
     {
         auto end = tokens.top(); tokens.pop();
@@ -377,7 +555,7 @@ ParseState *pushNode(){
         auto props = new std::vector<JProperty *>();
         while (!nodes.empty())
         {
-            if (auto prop = dynamic_cast<JProperty *>(nodes.top())){
+            if (auto prop = dynamic_cast<JProperty *>(nodes.top())){// TOOD JOSH: Add JTokenType
                 props->push_back(prop);
                 nodes.pop();
             }
@@ -400,16 +578,12 @@ ParseState *pushNode(){
     }
     case JTokenKind::PropertyToken:
     {
-        Token *trailingComma = nullptr;
-        if (tokens.top()->Kind == TokenKind::Comma){
-            hadTrailingComma = true;
-            trailingComma = tokens.top();
-            tokens.pop();
-        }
+        auto trailingComma = tokens.top(); tokens.pop();
         auto value = nodes.top(); nodes.pop();
         auto colon = tokens.top(); tokens.pop();
         auto name = dynamic_cast<JString*>(nodes.top()); nodes.pop();
         nodes.push(new JProperty(name, colon, value, trailingComma));
+        hadTrailingComma = trailingComma != nullptr;
         break;
     }
     default:
@@ -444,6 +618,7 @@ ParseState *parseOptionalComma(){
             emit(TokenKind::Comma);
             return pushNode();
         }
+        tokens.push(nullptr);// ,
         return unpeek(pushNode(), c);
     });
 }
@@ -459,6 +634,11 @@ ParseState *error(std::string message){
 
 ParseState *unexpectedInput(char c){
     std::cerr << "Unexpected Character '" << c << "'" << std::endl;
+    return ignoreInput();
+}
+
+ParseState *expectedInput(std::string expectedMessage, char c){
+    std::cerr << "Expected input " << expectedMessage << " got '" << c << "'" << std::endl;
     return ignoreInput();
 }
 
