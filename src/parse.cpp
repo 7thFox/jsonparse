@@ -5,11 +5,13 @@
 #include <sstream>
 #include <vector>
 #include <queue>
+#include <fstream>
 #include <algorithm>
+#include <chrono>
 
 #define ONE_INDENT "  "
 
-using namespace std::string_literals; // enables s-suffix for std::string literals
+// using namespace std::string_literals; // enables s-suffix for std::string literals
 
 const bool AllowTrailingCommas = true;
 const bool AllowSuperfluousLeadingZeroes = false;
@@ -96,6 +98,17 @@ public:
         ExponentSign = exponentSign;
         ExponentInteger = exponentInteger;
     }
+    
+    ~JNumber() {
+        if (LeadingSign != nullptr) delete LeadingSign;
+        if (Integer != nullptr) delete Integer;
+        if (Period != nullptr) delete Period;
+        if (FractionalInteger != nullptr) delete FractionalInteger;
+        if (Exponent != nullptr) delete Exponent;
+        if (ExponentSign != nullptr) delete ExponentSign;
+        if (ExponentInteger != nullptr) delete ExponentInteger;
+    }
+    
     void Print(std::string indent)
     {
         std::cout << indent;
@@ -128,6 +141,14 @@ public:
         Value = value;
         RightQuote = end;
     }
+
+    ~JString(){
+
+        if (LeftQuote != nullptr) delete LeftQuote;
+        if (Value != nullptr) delete Value;
+        if (RightQuote != nullptr) delete RightQuote;
+    }
+
     void Print(std::string indent) {
         std::cout
             << indent
@@ -147,6 +168,11 @@ public:
     {
         Value = value;
     }
+
+    ~JLiteral() {
+        if (Value != nullptr) delete Value;
+    }
+
     void Print(std::string indent) {
         std::cout << indent << Value->StringValue << std::endl;
     }
@@ -166,6 +192,14 @@ public:
         Value = value;
         TrailingComma = trailingComma;
     }
+
+    ~JProperty(){
+        if (NameString != nullptr) delete NameString;
+        if (ColonToken != nullptr) delete ColonToken;
+        if (Value != nullptr) delete Value;
+        if (TrailingComma != nullptr) delete TrailingComma;
+    }
+
     void Print(std::string indent) {
         std::cout << indent << "Property '" << NameString->Value->StringValue << "':" << std::endl;
         Value->Print(indent + ONE_INDENT);
@@ -184,6 +218,17 @@ public:
         BeginToken = begin;
         Properties = properties;
         EndToken = end;
+    }
+
+    ~JObject(){
+        if (BeginToken != nullptr) delete BeginToken;
+        if (EndToken != nullptr) delete EndToken;
+        if (Properties != nullptr) {
+            for (auto iter = Properties->begin(); iter != Properties->end(); ++iter) {
+                if (*iter != nullptr) delete *iter;
+            }
+            delete Properties;
+        }
     }
 
     void Print(std::string indent) {
@@ -205,6 +250,11 @@ public:
         TrailingComma = trailingComma;
     }
 
+    ~JArrayElement() {
+        if (Value != nullptr) delete Value;
+        if (TrailingComma != nullptr) delete TrailingComma;
+    }
+
     void Print(std::string indent){
         Value->Print(indent);
     }
@@ -224,6 +274,18 @@ public:
         Values = values;
         EndToken = end;
     }
+
+    ~JArray(){
+        if (StartToken != nullptr) delete StartToken;
+        if (EndToken != nullptr) delete EndToken;
+        if (Values != nullptr) {
+            for (auto iter = Values->begin(); iter != Values->end(); ++iter) {
+                if (*iter != nullptr) delete *iter;
+            }
+            delete Values;
+        }
+    }
+
     void Print(std::string indent) {
         std::cout << indent << "Array:" << std::endl;
         for (auto it = Values->begin(); it != Values->end(); ++it) {
@@ -290,52 +352,62 @@ ParseState *ignoreWhitespace(ParseState *);
 ParseState *unpeek(ParseState *, char);
 ParseState *readLiteral(std::string sequence, TokenKind literalKind);
 
-int main()
+int main(int argc, char *argv[])
 {
-    auto jsonText = R"(
-        {
-            "a0": [],
-            "a1": [3],
-            "am": [3,3,4,5,64,3],
-            "amt": [3,3,4,5,64,3,],
-            "amix": [3, "fslk", false, {"test": true}],
-            "l1": true,
-            "l2": false,
-            "l3": null,
-            "    ": 1,
-            "S   ": -1,
-            " D  ": 1.1,
-            "SD  ": -1.1,
-            "  E ": 1e3,
-            "S E ": -1e3,
-            "  ES": 1e-3,
-            "S ES": -1e-3,
-            " DE ": 1.6e3,
-            "SDE ": -1.6e3,
-            " DES": 1.6e-3,
-            "SDES": -1.6e-3,
-            "Z": 0,
-            "NZ": -0,
-            "ZD": 0.31,
-            "NZD": -0.31,
-            "string": "asdf"
-        }   )"s;
+    bool noprint = false;
+    bool bench = false;
+    for (int i = 0; i < argc - 1; i++)
+    {
+        auto arg = std::string(argv[i]);
+        if (arg == "-noprint") {
+            noprint = true;
+        }
+        else if (arg == "-bench") {
+            bench = true;
+        }
+    }
 
+    if (argc < 1) {
+        std::cerr << "Filename is required" << std::endl;
+        return 1;
+    }
+
+    auto filename = std::string(argv[argc - 1]);
+    std::ifstream file(filename);
+
+    if (!file.is_open()) {
+        std::cerr << "Could not open the file - '"
+             << filename << "'" << std::endl;
+        return 1;
+    }
+
+
+    auto start = std::chrono::high_resolution_clock::now();
     auto state = ignoreWhitespace(beginToken());
-
-    for (auto iter = jsonText.begin(); iter != jsonText.end(); ++iter)
+    char c;
+    while (file.get(c))
     {
         // std::cout << (*iter) << std::endl;
-        auto next = ((*state)(*iter));
+        auto next = ((*state)(c));
         delete state;
         state = next;
     }
+    auto end = std::chrono::high_resolution_clock::now();
+    file.close();
 
     if (nodes.size() > 1 || tokens.size() > 0) {
         std::cerr << "Unexpected EOF" << std::endl;
     }
-    else if (!nodes.empty()) {
+    else if (!noprint && !nodes.empty()) {
         nodes.top()->Print("");
+    }
+
+    if (bench) {
+        std::cout
+            << "Parsing '" << filename << "' Completed in "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
+            << "ms."
+            << std::endl;
     }
 
     while (!nodes.empty()){
